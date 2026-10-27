@@ -3,6 +3,33 @@ document.addEventListener("DOMContentLoaded", () => {
   const activitySelect = document.getElementById("activity");
   const signupForm = document.getElementById("signup-form");
   const messageDiv = document.getElementById("message");
+  const signupContainer = document.getElementById("signup-container");
+  const loginDialog = document.getElementById("login-dialog");
+  const loginForm = document.getElementById("login-form");
+  const loginButton = document.getElementById("login-button");
+  const logoutButton = document.getElementById("logout-button");
+  const authStatus = document.getElementById("auth-status");
+  const loginMessage = document.getElementById("login-message");
+  let isTeacher = false;
+
+  async function refreshAuthState() {
+    try {
+      const response = await fetch("/auth/me");
+      const result = await response.json();
+      isTeacher = response.ok && result.authenticated === true;
+      authStatus.dataset.username = isTeacher ? result.username : "";
+    } catch (error) {
+      isTeacher = false;
+      console.error("Error checking teacher login:", error);
+    }
+
+    signupContainer.hidden = !isTeacher;
+    loginButton.hidden = isTeacher;
+    logoutButton.hidden = !isTeacher;
+    authStatus.textContent = isTeacher
+      ? `Teacher: ${authStatus.dataset.username}`
+      : "Student view";
+  }
 
   // Function to fetch activities from API
   async function fetchActivities() {
@@ -12,6 +39,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
       // Clear loading message
       activitiesList.innerHTML = "";
+      activitySelect.replaceChildren(new Option("-- Select an activity --", ""));
 
       // Populate activities list
       Object.entries(activities).forEach(([name, details]) => {
@@ -30,7 +58,11 @@ document.addEventListener("DOMContentLoaded", () => {
                 ${details.participants
                   .map(
                     (email) =>
-                      `<li><span class="participant-email">${email}</span><button class="delete-btn" data-activity="${name}" data-email="${email}">❌</button></li>`
+                      `<li><span class="participant-email">${email}</span>${
+                        isTeacher
+                          ? `<button class="delete-btn" data-activity="${name}" data-email="${email}" aria-label="Unregister ${email}">Remove</button>`
+                          : ""
+                      }</li>`
                   )
                   .join("")}
               </ul>
@@ -139,6 +171,13 @@ document.addEventListener("DOMContentLoaded", () => {
       } else {
         messageDiv.textContent = result.detail || "An error occurred";
         messageDiv.className = "error";
+        if (response.status === 401) {
+          await refreshAuthState();
+          fetchActivities();
+          loginMessage.textContent = "Your session expired. Please log in again.";
+          loginMessage.className = "error";
+          loginDialog.showModal();
+        }
       }
 
       messageDiv.classList.remove("hidden");
@@ -155,6 +194,57 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   });
 
+  loginButton.addEventListener("click", () => {
+    loginMessage.textContent = "";
+    loginMessage.className = "hidden";
+    loginDialog.showModal();
+  });
+
+  document.getElementById("cancel-login").addEventListener("click", () => {
+    loginDialog.close();
+  });
+
+  loginForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const formData = new FormData(loginForm);
+
+    try {
+      const response = await fetch("/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          username: formData.get("username"),
+          password: formData.get("password"),
+        }),
+      });
+      const result = await response.json();
+
+      if (!response.ok) {
+        throw new Error(result.detail || "Login failed");
+      }
+
+      authStatus.dataset.username = result.username;
+      loginForm.reset();
+      loginDialog.close();
+      await refreshAuthState();
+      fetchActivities();
+    } catch (error) {
+      loginMessage.textContent = error.message || "Login failed";
+      loginMessage.className = "error";
+    }
+  });
+
+  logoutButton.addEventListener("click", async () => {
+    try {
+      await fetch("/auth/logout", { method: "POST" });
+      authStatus.dataset.username = "";
+      await refreshAuthState();
+      fetchActivities();
+    } catch (error) {
+      console.error("Error logging out:", error);
+    }
+  });
+
   // Initialize app
-  fetchActivities();
+  refreshAuthState().then(fetchActivities);
 });
